@@ -1,235 +1,225 @@
 #!/usr/bin/env python3
-"""Build static KOSPI/KOSDAQ market-cap heatmaps from Naver Finance PC ranking.
+"""KOSPI/KOSDAQ heatmap snapshots from Naver's public, undocumented JSON feeds.
 
-Uses publicly readable, undocumented HTML; subject to availability and use terms.
-No credentials, secrets or user information are used or transmitted.
-Never publish fabricated values or overwrite snapshots after a failed collection.
+No passwords, cookies or API keys. No synthetic stock values are ever published.
+A successful *complete* fetch for BOTH markets is required before files change.
 """
 from __future__ import annotations
 
 import datetime as dt
-from html.parser import HTMLParser
-import html
 import json
+import math
 import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "data"
-PAGE_URL = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+OUT = ROOT / 'data'
+PAGE_SIZE = 100
+MAX_PAGES = 80
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.7',
+    'Referer': 'https://m.stock.naver.com/',
 }
-CODE_RE = re.compile(r"(?:[?&]code=)([0-9]{6})(?:&|$)")
-PAGE_RE = re.compile(r"(?:[?&]|&amp;)page=(\d+)")
 
 
-class NaverRankingParser(HTMLParser):
-    """Parse the public '시가총액' table, independent of presentation classes."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.rows = []
-        self.in_tr = False
-        self.cells = []
-        self.cell = None
-        self.cell_type = None
-        self.cell_depth = 0
-        self.current_code = None
-        self.name_cell_index = None
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "tr":
-            self.in_tr = True
-            self.cells = []
-            self.current_code = None
-            self.name_cell_index = None
-        elif self.in_tr and tag in ("td", "th") and self.cell is None:
-            self.cell = []
-            self.cell_type = tag
-            self.cell_depth = 1
-        elif self.cell is not None:
-            if tag in ("td", "th"):
-                self.cell_depth += 1
-            if tag == "a":
-                href = html.unescape(attrs.get("href", ""))
-                m = CODE_RE.search(href)
-                if m and self.current_code is None:
-                    self.current_code = m.group(1)
-                    self.name_cell_index = len(self.cells)
-
-    def handle_data(self, data):
-        if self.cell is not None:
-            self.cell.append(data)
-
-    def handle_endtag(self, tag):
-        if self.cell is not None and tag in ("td", "th"):
-            self.cell_depth -= 1
-            if self.cell_depth == 0:
-                content = " ".join("".join(self.cell).split())
-                self.cells.append((self.cell_type, content))
-                self.cell = None
-                self.cell_type = None
-        elif tag == "tr" and self.in_tr:
-            if self.current_code and self.name_cell_index is not None:
-                stock = self._parse_row()
-                if stock:
-                    self.rows.append(stock)
-            self.in_tr = False
-            self.cells = []
-
-    def _parse_row(self):
-        vals = [text for _, text in self.cells]
-        # PC 시가총액 목록: N | 종목명 | 현재가 | 전일비 | 등락률 | 액면가 | 시가총액(억원)...
-        if len(vals) < 7:
-            return None
-        code = self.current_code
-        name_idx = self.name_cell_index
-        if name_idx is None or name_idx >= len(vals):
-            return None
-        name = vals[name_idx]
-        if not name or len(name) > 70 or not re.fullmatch(r"\d{6}", code):
-            return None
-        rate = None
-        for candidate in vals[name_idx + 1 : min(len(vals), name_idx + 6)]:
-            value = candidate.replace("−", "-").replace("＋", "+").replace(" ", "")
-            if re.fullmatch(r"[+-]?\d+(?:\.\d+)?%", value):
-                rate = float(value[:-1])
-                break
-        if rate is None or not -100 <= rate <= 100:
-            return None
-        # Known Naver ranking layout: market cap is two cells after fluctuation %.
-        # Name at 1, % at 4, market cap at 6; fallback uses header-independent % position.
-        pct_idx = next((i for i, s in enumerate(vals) if s.replace(" ", "").replace("−", "-").endswith("%") and i > name_idx), None)
-        if pct_idx is None:
-            return None
-        cap_idx = pct_idx + 2
-        if cap_idx >= len(vals):
-            return None
-        cap_str = vals[cap_idx].replace(",", "").replace(" ", "")
-        if not cap_str.isdecimal():
-            return None
-        cap = int(cap_str)
-        if cap <= 0:
-            return None
-        price_str = vals[name_idx + 1].replace(",", "")
-        price = int(price_str) if price_str.isdecimal() else None
-        result = {"code": code, "name": name, "marketCap": cap, "change": round(rate, 3)}
-        if price is not None:
-            result["price"] = price
-        return result
+def number(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get('value', value.get('closePrice'))
+    value = str(value).strip().replace(',', '').replace(' ', '')
+    value = value.replace('−', '-').replace('＋', '+').replace('%', '')
+    if not re.fullmatch(r'[+-]?(?:\d+\.?\d*|\.\d+)', value):
+        return None
+    n = float(value)
+    return n if math.isfinite(n) else None
 
 
-def get_page(market: str, page: int) -> str:
-    url = PAGE_URL.format(sosok=(0 if market == "KOSPI" else 1), page=page)
-    req = urllib.request.Request(url, headers={**HEADERS, "Referer": "https://finance.naver.com/sise/"})
-    errors = []
+def market_cap_in_100m(value):
+    """Current mobile ranking returns KRW. The heatmap expects 100m KRW."""
+    if isinstance(value, str) and any(u in value for u in ('조', '억')):
+        trillion = re.search(r'([\d,]+(?:\.\d+)?)\s*조', value)
+        hundred_million = re.search(r'([\d,]+(?:\.\d+)?)\s*억', value)
+        cap = (float(trillion.group(1).replace(',', '')) * 10000 if trillion else 0)
+        cap += float(hundred_million.group(1).replace(',', '')) if hundred_million else 0
+        return round(cap, 4) if cap > 0 else None
+    n = number(value)
+    # The m.stock.naver.com /api/stocks/marketValue feed returns KRW.
+    # Refuse smaller / ambiguous values rather than interpreting 억 as KRW.
+    if n is None or n < 100_000_000:
+        return None
+    return round(n / 100_000_000, 4)
+
+
+def parse_stock(record):
+    if not isinstance(record, dict):
+        return None
+    code = str(record.get('itemCode') or record.get('stockCode') or record.get('symbolCode') or record.get('code') or '')
+    if code.startswith('A') and re.fullmatch(r'A\d{6}', code):
+        code = code[1:]
+    if not re.fullmatch(r'\d{6}', code):
+        return None
+    name = str(record.get('stockName') or record.get('name') or '').strip()
+    if not (1 <= len(name) <= 80):
+        return None
+    cap = market_cap_in_100m(record.get('marketValue'))
+    if cap is None:
+        return None
+    change = number(record.get('fluctuationsRatio', record.get('changeRate', record.get('changeRatio'))))
+    if change is None or abs(change) > 100:
+        return None
+    # Some feeds express the magnitude as a positive number, and direction separately.
+    direction = record.get('compareToPreviousPrice') or record.get('fluctuationsType')
+    if isinstance(direction, dict):
+        direction = direction.get('name', direction.get('code'))
+    direction = str(direction or '').upper()
+    if direction in {'FALLING', 'DOWN', 'LOWER', '5', '하락'} and change > 0:
+        change = -change
+    price = number(record.get('closePrice', record.get('currentPrice')))
+    stock = {'code': code, 'name': name, 'marketCap': cap, 'change': round(change, 3)}
+    if price is not None and price >= 0:
+        stock['price'] = round(price, 3)
+    return stock
+
+
+def get_json(url):
+    request = urllib.request.Request(url, headers=HEADERS)
+    failures = []
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=22) as res:
-                if res.status != 200:
-                    raise ValueError(f"HTTP {res.status}")
-                raw = res.read(900_000)
-                if len(raw) >= 900_000:
-                    raise ValueError("Unexpected oversized HTML response")
-                # Classic Naver Finance PC pages use EUC-KR.
-                charset = res.headers.get_content_charset() or "euc-kr"
-                try:
-                    return raw.decode(charset)
-                except (LookupError, UnicodeDecodeError):
-                    return raw.decode("euc-kr", errors="replace")
-        except (urllib.error.URLError, ValueError, TimeoutError) as ex:
-            errors.append(f"{type(ex).__name__}: {ex}")
-            if attempt != 2:
-                time.sleep(1.4 * (attempt + 1))
-    raise RuntimeError(f"{market} page {page}: {' / '.join(errors)}")
+            with urllib.request.urlopen(request, timeout=22) as response:
+                body = response.read(3_000_001)
+                if len(body) > 3_000_000:
+                    raise ValueError('Unexpectedly large API response')
+                if response.status != 200:
+                    raise ValueError(f'HTTP {response.status}')
+            return json.loads(body.decode('utf-8-sig'))
+        except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as exc:
+            failures.append(f'{type(exc).__name__}: {str(exc)[:200]}')
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(' | '.join(failures))
 
 
-def last_page_number(html_source: str) -> int | None:
-    # Last-page navigation control in Naver PC list (pgRR).
-    match = re.search(r'<td\b[^>]*class=["\'][^"\']*\bpgRR\b[^"\']*["\'][^>]*>(.*?)</td>', html_source, re.I | re.S)
-    if not match:
-        return None
-    nums = [int(n) for n in PAGE_RE.findall(html.unescape(match.group(1)))]
-    return max(nums) if nums else None
+def extract(payload):
+    """Accept the documented stocks[] response and a few wrapper variations."""
+    if isinstance(payload, list):
+        return payload, None
+    if not isinstance(payload, dict):
+        raise ValueError(f'Unexpected JSON type: {type(payload).__name__}')
+    candidates = [payload]
+    for key in ('result', 'data', 'output'):
+        if isinstance(payload.get(key), dict):
+            candidates.append(payload[key])
+    for section in candidates:
+        for key in ('stocks', 'items', 'stockList', 'list'):
+            if isinstance(section.get(key), list):
+                raw_total = section.get('totalCount', payload.get('totalCount'))
+                total = number(raw_total)
+                return section[key], int(total) if total is not None else None
+    raise ValueError('Cannot find stocks[]/items[]. JSON keys: ' + ','.join(payload.keys()))
 
 
-def collect(market: str):
-    first_html = get_page(market, 1)
-    parser = NaverRankingParser()
-    parser.feed(first_html)
-    if len(parser.rows) < 10:
-        raise ValueError(f"{market}: Could not parse Naver market-cap ranking (page 1; {len(parser.rows)} valid rows)")
-    end = last_page_number(first_html)
-    if end is not None and not 1 <= end <= 100:
-        raise ValueError(f"{market}: Unexpected last page {end}")
-    stocks = {}
-    for row in parser.rows:
-        stocks[row["code"]] = row
-    # If pgRR is unavailable, stop at the first empty page; otherwise collect every
-    # page to the advertised last page so '전체' truly covers the scraped market.
-    limit = end if end is not None else 100
-    page = 2
-    while page <= limit:
-        time.sleep(.15)
-        source = get_page(market, page)
-        p = NaverRankingParser()
-        p.feed(source)
-        if not p.rows:
-            if end is not None:
-                raise ValueError(f"{market}: Missing rows on page {page} of {end}")
+def market_url(market, page, api):
+    if api == 'mobile':
+        return f'https://m.stock.naver.com/api/stocks/marketValue/{market}?' + urlencode({'page': page, 'pageSize': PAGE_SIZE})
+    return 'https://m.stock.naver.com/front-api/stock/domestic/stockList?' + urlencode({
+        'sortType': 'marketValue', 'category': market, 'page': page, 'pageSize': PAGE_SIZE,
+    })
+
+
+def collect_from_api(market, api):
+    found = {}
+    expected = None
+    for page in range(1, MAX_PAGES + 1):
+        if page != 1:
+            time.sleep(0.25)
+        url = market_url(market, page, api)
+        payload = get_json(url)
+        items, total = extract(payload)
+        if expected is None and total is not None:
+            expected = total
+        if not items:
+            if expected is not None and len(found) >= expected * 0.95:
+                break
+            raise ValueError(f'{market} page {page}: empty listing; got {len(found)} of expected {expected}')
+        added = 0
+        for item in items:
+            parsed = parse_stock(item)
+            if parsed is not None:
+                if parsed['code'] not in found:
+                    added += 1
+                found[parsed['code']] = parsed
+        print(f'{market} {api} page {page}: {len(items)} raw, {added} new valid, total {len(found)}, API count {expected}', flush=True)
+        if page == 1 and added < 10:
+            sample_keys = sorted(items[0]) if items and isinstance(items[0], dict) else []
+            raise ValueError(f'Cannot interpret Naver stock fields; first stock keys={sample_keys}')
+        if added == 0:
+            raise ValueError(f'{market}: duplicate/unparseable API page {page}')
+        if expected is not None:
+            if len(found) >= expected:
+                break
+            # Some returned entries may be malformed or halted; never silently
+            # claim an incomplete list as 'all'.
+            if page * PAGE_SIZE >= expected and len(items) < PAGE_SIZE:
+                break
+        elif len(items) < PAGE_SIZE:
             break
-        was = len(stocks)
-        for row in p.rows:
-            stocks[row["code"]] = row
-        if len(stocks) == was:
-            if end is not None:
-                raise ValueError(f"{market}: Duplicate page {page} of {end}")
-            break
-        if len(p.rows) < 40:
-            if end is not None and page < end:
-                raise ValueError(f"{market}: Unexpectedly short page {page} of {end}")
-            break
-        page += 1
     else:
-        if end is None:
-            raise ValueError(f"{market}: Reached 100 pages without verifying list completion")
-    ordered = sorted(stocks.values(), key=lambda row: row["marketCap"], reverse=True)
-    if len(ordered) < 200:
-        raise ValueError(f"{market}: Only {len(ordered)} rows. Refusing partial '전체' market list")
-    print(f"{market}: {len(ordered)} distinct stocks scraped; final page={end or page}, total cap={sum(x['marketCap'] for x in ordered)} (100m KRW)")
+        raise ValueError(f'{market}: more than {MAX_PAGES} pages; refusing incomplete list')
+
+    if len(found) < 200:
+        raise ValueError(f'{market}: only {len(found)} parseable rows, need at least 200')
+    if expected is not None and len(found) < expected * .95:
+        raise ValueError(f'{market}: incomplete listing: {len(found)} of {expected} items (<95%)')
+    ordered = sorted(found.values(), key=lambda item: item['marketCap'], reverse=True)
+    print(f'{market}: complete snapshot, {len(ordered)} companies via {api}', flush=True)
     return ordered
 
 
+def collect(market):
+    errors = []
+    for api in ('mobile', 'front'):
+        try:
+            return collect_from_api(market, api)
+        except Exception as exc:
+            errors.append(f'{api}: {exc}')
+            print(f'{market} {api} unavailable: {exc}', file=sys.stderr, flush=True)
+    raise RuntimeError(f'{market}: both public JSON routes failed. ' + ' ; '.join(errors))
+
+
 def main():
-    result = {}
-    timestamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    for market in ("KOSPI", "KOSDAQ"):
-        rows = collect(market)
-        result[market] = {
-            "market": market,
-            "updatedAt": timestamp,
-            "source": "Naver Finance PC market capitalization ranking (unofficial)",
-            "unit": "100millionKRW",
-            "realtime": False,
-            "stocks": rows,
+    generated = {}
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
+    for market in ('KOSPI', 'KOSDAQ'):
+        stocks = collect(market)
+        generated[market] = {
+            'market': market,
+            'updatedAt': timestamp,
+            'source': 'Naver mobile market-cap JSON (unofficial)',
+            'unit': '100millionKRW',
+            'realtime': False,
+            'stocks': stocks,
         }
-    # Write only after *both* markets succeeded. Failed runs preserve old data.
     OUT.mkdir(parents=True, exist_ok=True)
-    for market, value in result.items():
-        (OUT / f"{market.lower()}.json").write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    # Do not modify either snapshot until BOTH markets have been validated.
+    for market, data in generated.items():
+        dest = OUT / f'{market.lower()}.json'
+        dest.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')) + '\n', encoding='utf-8')
+    print('Both KOSPI and KOSDAQ snapshots generated successfully.', flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        print(f"DATA COLLECTION FAILED (snapshot not overwritten): {exc}", file=sys.stderr)
+        print('DATA COLLECTION FAILED (existing snapshots preserved):', exc, file=sys.stderr)
         raise SystemExit(1)
