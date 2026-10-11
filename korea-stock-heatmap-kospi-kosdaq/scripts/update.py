@@ -43,20 +43,29 @@ def number(value):
     return n if math.isfinite(n) else None
 
 
-def market_cap_in_100m(value):
-    """Current mobile ranking returns KRW. The heatmap expects 100m KRW."""
-    if isinstance(value, str) and any(u in value for u in ('조', '억')):
+def market_cap_in_100m(raw_value, displayed_value=None):
+    """Convert Naver market caps to 100-million KRW units.
+
+    IMPORTANT: Naver's current ``marketValueRaw`` is in *won* (KRW).
+    The human-readable marketValue/marketValueHangeul fields are for display
+    and must NOT be blindly assumed to use the same unit.
+    """
+    raw = number(raw_value)
+    if raw is not None and raw >= 100_000_000:
+        return round(raw / 100_000_000, 4)
+
+    value = displayed_value
+    if isinstance(value, str) and ('조' in value or '억' in value):
         trillion = re.search(r'([\d,]+(?:\.\d+)?)\s*조', value)
         hundred_million = re.search(r'([\d,]+(?:\.\d+)?)\s*억', value)
         cap = (float(trillion.group(1).replace(',', '')) * 10000 if trillion else 0)
         cap += float(hundred_million.group(1).replace(',', '')) if hundred_million else 0
         return round(cap, 4) if cap > 0 else None
+
+    # Only used if rawValue is absent: the displayed Naver marketValue
+    # numeric field is in 100-million-won units, not plain KRW.
     n = number(value)
-    # The m.stock.naver.com /api/stocks/marketValue feed returns KRW.
-    # Refuse smaller / ambiguous values rather than interpreting 억 as KRW.
-    if n is None or n < 100_000_000:
-        return None
-    return round(n / 100_000_000, 4)
+    return round(n, 4) if n is not None and n > 0 else None
 
 
 def parse_stock(record):
@@ -67,10 +76,13 @@ def parse_stock(record):
         code = code[1:]
     if not re.fullmatch(r'\d{6}', code):
         return None
-    name = str(record.get('stockName') or record.get('name') or '').strip()
+    name = str(record.get('stockName') or record.get('itemName') or record.get('name') or '').strip()
     if not (1 <= len(name) <= 80):
         return None
-    cap = market_cap_in_100m(record.get('marketValue'))
+    cap = market_cap_in_100m(
+        record.get('marketValueRaw'),
+        record.get('marketValueHangeul') or record.get('marketValue'),
+    )
     if cap is None:
         return None
     change = number(record.get('fluctuationsRatio', record.get('changeRate', record.get('changeRatio'))))
@@ -83,7 +95,7 @@ def parse_stock(record):
     direction = str(direction or '').upper()
     if direction in {'FALLING', 'DOWN', 'LOWER', '5', '하락'} and change > 0:
         change = -change
-    price = number(record.get('closePrice', record.get('currentPrice')))
+    price = number(record.get('closePriceRaw') or record.get('closePrice') or record.get('currentPrice'))
     stock = {'code': code, 'name': name, 'marketCap': cap, 'change': round(change, 3)}
     if price is not None and price >= 0:
         stock['price'] = round(price, 3)
@@ -160,8 +172,12 @@ def collect_from_api(market, api):
                 found[parsed['code']] = parsed
         print(f'{market} {api} page {page}: {len(items)} raw, {added} new valid, total {len(found)}, API count {expected}', flush=True)
         if page == 1 and added < 10:
-            sample_keys = sorted(items[0]) if items and isinstance(items[0], dict) else []
-            raise ValueError(f'Cannot interpret Naver stock fields; first stock keys={sample_keys}')
+            sample = items[0] if items and isinstance(items[0], dict) else {}
+            safe_fields = ('itemCode', 'stockName', 'itemName', 'marketValueRaw',
+                           'marketValue', 'marketValueHangeul', 'fluctuationsRatio',
+                           'closePriceRaw')
+            sample_values = {key: sample.get(key) for key in safe_fields if key in sample}
+            raise ValueError(f'Cannot parse Naver stocks; first record PUBLIC fields={sample_values}')
         if added == 0:
             raise ValueError(f'{market}: duplicate/unparseable API page {page}')
         if expected is not None:
