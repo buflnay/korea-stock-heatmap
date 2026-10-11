@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>한국 주식 히트맵 · KOSPI / KOSDAQ</title>
+<style>
+:root{color-scheme:light;--ink:#172336;--sub:#7c899b;--line:#e1e7ef;--blue:#2167de;--red:#e64148;--dark:#1d3773;--bg:#ffffff}
+*{box-sizing:border-box}html,body{margin:0;min-width:0;background:#fff;color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif}body{padding:10px}
+.shell{max-width:1650px;margin:0 auto;border:1px solid #dce3ed;border-radius:12px;padding:16px 17px 13px;background:var(--bg)}
+.top{display:flex;align-items:start;justify-content:space-between;gap:14px}.kicker{font-size:10px;font-weight:800;letter-spacing:.11em;color:#8b96a8;margin-bottom:5px}.top h1{font-size:21px;font-weight:810;letter-spacing:-.65px;line-height:1.25;margin:0}.top p{margin:6px 0 0;color:var(--sub);font-size:11px}
+.badge{border-radius:999px;border:1px solid var(--line);font-size:10px;padding:7px 10px;color:#6b7b90;white-space:nowrap}.badge.warn{background:#fff9ee;color:#a56c2d;border-color:#f1e5ca}.badge.error{background:#fff5f5;color:#bd3b43;border-color:#f7d4d9}
+.bar{margin:15px 0 10px;padding:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px}.bar-left,.bar-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.market-switch{display:flex;gap:3px;background:#f1f4f9;padding:3px;border-radius:8px}.market,.limit,.refresh{font-family:inherit;cursor:pointer}.market{background:none;border:0;color:#627189;border-radius:6px;font-size:12px;padding:8px 11px;font-weight:720}.market.active{background:#fff;color:#173974;box-shadow:0 1px 5px #22375518}
+.limits{display:flex;gap:4px}.limit{font-size:11px;font-weight:650;border:1px solid #dce3ee;border-radius:7px;background:white;padding:8px 10px;color:#53637a}.limit.active{background:#1c3777;border-color:#1c3777;color:white}
+.search-wrap{display:flex;align-items:center;gap:7px;border:1px solid #dce3eb;border-radius:7px;padding:0 10px;height:35px;min-width:182px}.search-icon{font-size:15px;color:#7a88a0}.search{border:0;outline:0;width:100%;min-width:0;font:inherit;font-size:12px;color:#263957;background:transparent}.search::placeholder{color:#9da8b6}.refresh{border:1px solid #dce3ee;border-radius:7px;background:white;min-width:36px;height:35px;color:#4d5f7c;font-size:18px;line-height:1}.refresh:hover,.limit:not(.active):hover{background:#f6f8fb}
+.summary{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap;margin:8px 2px}.market-title{font-size:14px;font-weight:800;letter-spacing:-.2px}.mini-summary{display:flex;align-items:center;gap:13px;font-size:11px;color:#8894a6}.mini-summary b{font-weight:800}.n-up{color:#ce353e}.n-down{color:#2562d9}.n-flat{color:#718097}
+.canvas{width:100%;height:clamp(350px,49vw,605px);overflow:hidden;background:#f6f8fb;position:relative;border:1px solid #d7dfec;border-radius:7px}
+.tile{position:absolute;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;flex-direction:column;overflow:hidden;text-decoration:none;color:#fff;border:1px solid #f6f9ff;line-height:1.35;transition:filter .12s ease;outline-offset:-3px;padding:2px;cursor:pointer}
+.tile:hover{filter:brightness(1.12);z-index:5;outline:2px solid white}.tile:focus-visible{z-index:6;outline:3px solid #183b81}.tile-name{max-width:96%;font-size:clamp(11px,1.05vw,18px);font-weight:790;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;text-shadow:0 1px 2px #0d213c25}.tile-rate{font-size:clamp(10px,.84vw,14px);font-weight:650;margin-top:4px;white-space:nowrap;color:#fffc}.tile.medium .tile-name{font-size:11px}.tile.medium .tile-rate{font-size:10px;margin-top:0}.tile.small .tile-name{font-size:10px}.tile.small .tile-rate{display:none}.tile.micro .tile-name,.tile.micro .tile-rate{display:none}
+.blank{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;background:linear-gradient(150deg,#f8fafd,#eaf0f8);padding:25px;color:#66778e;font-size:12px;line-height:1.8}.blank strong{display:block;font-size:16px;color:#263b57;margin-bottom:6px}
+.bottom{margin-top:8px;display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap;font-size:10px;color:#738095;border:1px solid var(--line);padding:11px 12px;border-radius:7px;line-height:1.5}.bottom strong{color:#263d6d}.bottom a{color:#3465a0;text-decoration:none}.bottom a:hover{text-decoration:underline}
+.legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.legend-ramp{width:122px;height:9px;border-radius:3px;background:linear-gradient(90deg,#1245b6,#b9cbea,#e2e5eb,#f6b4b6,#e01c27)}
+.demo{display:none;color:#b04c34;background:#fff1e6;font-weight:750;border:1px solid #ffdfc7;padding:7px 10px;border-radius:7px;margin:8px 0;font-size:11px}.demo.on{display:block}
+@media(max-width:720px){body{padding:3px}.shell{padding:11px 8px;border-radius:7px}.top h1{font-size:17px}.top p{font-size:10px}.kicker{font-size:9px}.badge{font-size:9px;padding:5px 7px}.bar{gap:9px;margin:12px 0 8px;padding:7px}.bar-left,.bar-right{width:100%;justify-content:space-between;gap:5px}.market{font-size:11px;padding:7px 8px}.limit{font-size:10px;padding:7px 9px}.search-wrap{flex:1;min-width:0}.canvas{height:430px}.mini-summary{gap:7px;font-size:10px}.tile-name{font-size:10px}.tile-rate{font-size:9px}.bottom{padding:9px;gap:6px}.legend-ramp{width:82px}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <div class="top"><div><div class="kicker">KOREA STOCK MARKET · MARKET CAP HEATMAP</div><h1 id="title">KOSPI 히트맵</h1><p>네이버 금융 기준 · 시가총액 비례 · 등락률 색상 · 비실시간</p></div><span class="badge" id="badge">데이터 확인 중</span></div>
+  <div class="demo" id="demo">디자인 시연: 아래 종목·가격·등락률은 예시이며 실제 시세가 아닙니다.</div>
+  <div class="bar">
+    <div class="bar-left"><div class="market-switch" role="group" aria-label="시장 선택"><button class="market active" data-market="KOSPI" aria-pressed="true">KOSPI</button><button class="market" data-market="KOSDAQ" aria-pressed="false">KOSDAQ</button></div>
+    <div class="limits" role="group" aria-label="시가총액 상위 개수"><button class="limit" data-limit="50" aria-pressed="false">상위 50</button><button class="limit" data-limit="100" aria-pressed="false">상위 100</button><button class="limit active" data-limit="200" aria-pressed="true">상위 200</button><button class="limit" data-limit="all" aria-pressed="false">전체</button></div></div>
+    <div class="bar-right"><label class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input id="search" class="search" type="search" placeholder="종목명 / 종목코드 검색" autocomplete="off" aria-label="종목명 또는 종목코드 검색"></label><button class="refresh" id="refresh" title="저장된 최신 데이터를 다시 읽기" aria-label="최신 저장 데이터 다시 읽기">↻</button></div>
+  </div>
+  <div class="summary"><span class="market-title" id="heading">KOSPI · 상위 200</span><div class="mini-summary" id="summary"><span>종목 데이터를 읽는 중</span></div></div>
+  <div class="canvas" id="canvas" role="region" aria-label="시가총액 기반 한국 주식 히트맵"><div class="blank"><div><strong>데이터를 불러오는 중</strong>잠시 기다려 주세요.</div></div></div>
+  <div class="bottom"><span id="updated">마지막 수집 시각 확인 중</span><span class="legend"><span>-5%</span><span class="legend-ramp" aria-hidden="true"></span><span>+5%</span><span>하락 파랑 / 상승 빨강</span></span><span>출처: <strong>네이버 금융</strong> · <a href="https://finance.naver.com/sise/sise_market_sum.naver" target="_blank" rel="noopener noreferrer">원본 보기 ↗</a></span></div>
+</main>
+<script>
+'use strict';
+const byId=id=>document.getElementById(id);
+const query=new URLSearchParams(location.search);
+const DEMO=query.get('demo')==='1';
+let market=query.get('market')?.toUpperCase()==='KOSDAQ'?'KOSDAQ':'KOSPI';
+let limit=['50','100','200','all'].includes(query.get('limit'))?query.get('limit'):'200';
+const cache={};
+let activeRows=[];
+let drawTimer;
+const signs=n=>(n>0?'+':'')+n.toFixed(2)+'%';
+const color=n=>{
+  if(Math.abs(n)<.005)return '#a5b0bf';
+  const a=Math.min(1,Math.abs(n)/5);
+  if(n>0)return `hsl(357 82% ${Math.round(73-29*a)}%)`;
+  return `hsl(218 76% ${Math.round(77-31*a)}%)`;
+};
+function fmtTime(v){const d=new Date(v);return Number.isNaN(d.getTime())?'미확인':new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',dateStyle:'medium',timeStyle:'short'}).format(d);}
+function showEmpty(head,detail){const n=byId('canvas');n.replaceChildren();const box=document.createElement('div');box.className='blank';const inner=document.createElement('div');const strong=document.createElement('strong');strong.textContent=head;const p=document.createElement('div');p.textContent=detail;inner.append(strong,p);box.append(inner);n.append(box);}
+function squarify(stocks,width,height){
+  const total=stocks.reduce((sum,s)=>sum+s.marketCap,0);
+  if(!total||!width||!height)return [];
+  const pending=stocks.map(s=>({...s,area:s.marketCap/total*width*height}));
+  const output=[];
+  let r={x:0,y:0,w:width,h:height};
+  const worst=(row,side)=>{
+    if(!row.length)return Infinity;
+    const amounts=row.map(s=>s.area),sum=amounts.reduce((a,b)=>a+b,0),min=Math.min(...amounts),max=Math.max(...amounts);
+    if(min<=0||sum<=0)return Infinity;
+    return Math.max(side*side*max/(sum*sum),sum*sum/(side*side*min));
+  };
+  function put(row){
+    const area=row.reduce((sum,s)=>sum+s.area,0);
+    if(r.w>=r.h){
+      const w=Math.min(r.w,area/Math.max(1,r.h));let y=r.y;
+      row.forEach((s,i)=>{const h=i===row.length-1?r.y+r.h-y:s.area/Math.max(.001,w);output.push({...s,x:r.x,y,w,h:Math.max(0,h)});y+=h;});
+      r.x+=w;r.w=Math.max(0,r.w-w);
+    }else{
+      const h=Math.min(r.h,area/Math.max(1,r.w));let x=r.x;
+      row.forEach((s,i)=>{const w=i===row.length-1?r.x+r.w-x:s.area/Math.max(.001,h);output.push({...s,x,y:r.y,w:Math.max(0,w),h});x+=w;});
+      r.y+=h;r.h=Math.max(0,r.h-h);
+    }
+  }
+  while(pending.length){const row=[pending.shift()];const side=Math.max(.001,Math.min(r.w,r.h));while(pending.length&&worst([...row,pending[0]],side)<=worst(row,side))row.push(pending.shift());put(row);}
+  return output;
+}
+function setControls(){
+  document.querySelectorAll('[data-market]').forEach(b=>{const yes=b.dataset.market===market;b.classList.toggle('active',yes);b.setAttribute('aria-pressed',String(yes));});
+  document.querySelectorAll('[data-limit]').forEach(b=>{const yes=b.dataset.limit===limit;b.classList.toggle('active',yes);b.setAttribute('aria-pressed',String(yes));});
+  byId('title').textContent=market+' 히트맵';
+  byId('heading').textContent=market+' · '+(limit==='all'?'전체':'상위 '+limit);
+}
+function rememberUrl(){const p=new URLSearchParams(location.search);p.set('market',market);p.set('limit',limit);history.replaceState(null,'',location.pathname+'?'+p.toString());}
+function updateSummary(rows,total,querying){
+  const box=byId('summary');box.replaceChildren();
+  const bits=[`${rows.length.toLocaleString('ko-KR')}개 종목 표시`];
+  const a=document.createElement('span');a.textContent=bits.join(' · ');box.append(a);
+  if(!rows.length)return;
+  for(const [title,v,cls] of [['상승',rows.filter(x=>x.change>0).length,'n-up'],['하락',rows.filter(x=>x.change<0).length,'n-down'],['보합',rows.filter(x=>x.change===0).length,'n-flat']]){const n=document.createElement('b');n.className=cls;n.textContent=title+' '+v;box.append(n);}
+  if(querying){const info=document.createElement('span');info.textContent='전체 '+total.toLocaleString('ko-KR')+'종목에서 검색';box.append(info);}
+}
+function render(){
+  setControls();
+  const key=byId('search').value.trim().toLowerCase();
+  const rows=key?activeRows.filter(s=>s.name.toLowerCase().includes(key)||s.code.includes(key)):(limit==='all'?activeRows:activeRows.slice(0,Number(limit)));
+  updateSummary(rows,activeRows.length,!!key);
+  if(!rows.length){showEmpty(key?'검색 결과가 없습니다':'시장 데이터가 없습니다',key?'다른 종목명이나 6자리 코드를 입력해 주세요.':'GitHub Actions에서 네이버 금융 수집을 확인해 주세요.');return;}
+  const node=byId('canvas'),width=node.clientWidth,height=node.clientHeight;
+  if(width<=0||height<=0)return;
+  const shapes=squarify(rows,width,height),frag=document.createDocumentFragment();
+  for(const s of shapes){
+    if(s.w<.25||s.h<.25)continue;
+    const a=document.createElement('a');a.className='tile';
+    const smaller=Math.min(s.w,s.h);
+    if(smaller<23||s.w<39||s.h<28)a.classList.add('micro');
+    else if(s.w<64||s.h<42)a.classList.add('small');
+    else if(s.w<108||s.h<65)a.classList.add('medium');
+    a.href='https://finance.naver.com/item/main.naver?code='+encodeURIComponent(s.code);a.target='_blank';a.rel='noopener noreferrer';
+    a.title=`${s.name} (${s.code}) · ${signs(s.change)} · 시총 ${s.marketCap.toLocaleString('ko-KR')}억원`;
+    a.setAttribute('aria-label',a.title);
+    a.style.left=s.x+'px';a.style.top=s.y+'px';a.style.width=Math.max(0,s.w)+'px';a.style.height=Math.max(0,s.h)+'px';a.style.backgroundColor=color(s.change);
+    if(!a.classList.contains('micro')){
+      const label=document.createElement('span');label.className='tile-name';label.textContent=s.name;a.append(label);
+      const rate=document.createElement('span');rate.className='tile-rate';rate.textContent=signs(s.change);a.append(rate);
+    }
+    frag.append(a);
+  }
+  node.replaceChildren(frag);
+}
+function validStock(s){return s&&typeof s.name==='string'&&typeof s.code==='string'&&/^\d{6}$/.test(s.code)&&Number.isFinite(s.marketCap)&&s.marketCap>0&&Number.isFinite(s.change)&&Math.abs(s.change)<=100;}
+async function load(force=false){
+  const target=market;setControls();
+  if(!cache[target]||force){
+    byId('badge').className='badge';byId('badge').textContent='데이터 확인 중';
+    showEmpty('한국 주식 데이터를 확인 중', '잠시 기다려 주세요.');
+    try{
+      if(DEMO){cache[target]=demoData(target);}
+      else{
+        const res=await fetch('./data/'+target.toLowerCase()+'.json?v='+Date.now(),{cache:'no-store'});
+        if(!res.ok)throw new Error('JSON HTTP '+res.status);
+        const data=await res.json();
+        if(data.market!==target||!Array.isArray(data.stocks))throw new Error('잘못된 데이터 파일');
+        cache[target]=data;
+      }
+    }catch(err){
+      if(market!==target)return;
+      console.warn(err);activeRows=[];byId('badge').className='badge error';byId('badge').textContent='불러오기 실패';byId('updated').textContent='네이버 금융 수집 또는 배포 파일을 확인해 주세요.';
+      showEmpty('히트맵 데이터를 불러올 수 없습니다', 'GitHub Actions 실행 기록을 확인해 주세요.');
+      return;
+    }
+  }
+  if(market!==target)return;
+  const data=cache[target];
+  activeRows=data.stocks.filter(validStock).sort((a,b)=>b.marketCap-a.marketCap);
+  const dated=data.updatedAt&&Number.isFinite(new Date(data.updatedAt).getTime());
+  const stale=dated&&(Date.now()-new Date(data.updatedAt).getTime())>120*3600*1000;
+  byId('badge').className='badge'+(stale&&!DEMO?' warn':'');
+  byId('badge').textContent=DEMO?'시연 데이터':activeRows.length?(stale?'갱신 지연':'비실시간 데이터'):'수집 대기';
+  byId('updated').textContent=DEMO?'시연용 데이터 — 실제 종목 등락률·시총 아님':`마지막 수집: ${dated?fmtTime(data.updatedAt):'수집 전'} · 네이버 금융 게시 시점 기준 · 실시간 아님 · ${activeRows.length.toLocaleString('ko-KR')}개 수집`;
+  render();
+}
+const exampleKospi=['삼성전자','SK하이닉스','현대차','기아','삼성바이오로직스','셀트리온','KB금융','NAVER','삼성물산','LG에너지솔루션','HD현대중공업','두산에너빌리티','삼성전기','포스코홀딩스','신한지주','SK스퀘어','하나금융지주','한국전력','LG전자','카카오','삼성SDI','대한항공','SK텔레콤','우리금융지주','KT','고려아연','LG화학'];
+const exampleKosdaq=['알테오젠','에코프로비엠','에코프로','HLB','리가켐바이오','레인보우로보틱스','휴젤','펩트론','JYP Ent.','리노공업','실리콘투','클래시스','셀트리온제약','파마리서치','삼천당제약','에스엠','원익IPS','동진쎄미켐','주성엔지니어링','고영'];
+function demoData(m){
+  const names=m==='KOSPI'?exampleKospi:exampleKosdaq;
+  const data=Array.from({length:290},(_,i)=>{
+    const name=i<names.length?names[i]:`시연용 종목 ${i+1}`;
+    return {code:String(i+1).padStart(6,'0'),name,marketCap:Math.round(550000/Math.pow(i+1,.79)),change:Math.round((Math.sin(i*7.1+1)*4.8)*100)/100};
+  });
+  return {market:m,updatedAt:new Date().toISOString(),stocks:data};
+}
+for(const button of document.querySelectorAll('[data-market]'))button.addEventListener('click',()=>{if(market===button.dataset.market)return;market=button.dataset.market;byId('search').value='';rememberUrl();load();});
+for(const button of document.querySelectorAll('[data-limit]'))button.addEventListener('click',()=>{limit=button.dataset.limit;rememberUrl();render();});
+byId('search').addEventListener('input',render);
+byId('refresh').addEventListener('click',()=>load(true));
+window.addEventListener('resize',()=>{clearTimeout(drawTimer);drawTimer=setTimeout(render,120);});
+if(DEMO)byId('demo').classList.add('on');
+load();
+</script>
+</body>
+</html>
