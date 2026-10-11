@@ -149,28 +149,47 @@ def market_url(market, page, api):
 
 
 def collect_from_api(market, api):
+    """Read the complete source pagination, then keep only safely parsed rows.
+
+    Naver's totalCount can include items without usable prices/market caps,
+    so the raw listing count and usable stock count must not be conflated.
+    """
     found = {}
     expected = None
+    raw_seen = 0
+    rejected = 0
+    last_page_seen = False
     for page in range(1, MAX_PAGES + 1):
         if page != 1:
             time.sleep(0.25)
-        url = market_url(market, page, api)
-        payload = get_json(url)
+        payload = get_json(market_url(market, page, api))
         items, total = extract(payload)
         if expected is None and total is not None:
             expected = total
         if not items:
-            if expected is not None and len(found) >= expected * 0.95:
+            if expected is not None and raw_seen >= expected * 0.98:
+                last_page_seen = True
                 break
-            raise ValueError(f'{market} page {page}: empty listing; got {len(found)} of expected {expected}')
+            raise ValueError(
+                f'{market} page {page}: empty listing; '
+                f'read {raw_seen} raw rows of expected {expected}'
+            )
+        raw_seen += len(items)
         added = 0
         for item in items:
             parsed = parse_stock(item)
-            if parsed is not None:
-                if parsed['code'] not in found:
-                    added += 1
-                found[parsed['code']] = parsed
-        print(f'{market} {api} page {page}: {len(items)} raw, {added} new valid, total {len(found)}, API count {expected}', flush=True)
+            if parsed is None:
+                rejected += 1
+                continue
+            if parsed['code'] not in found:
+                added += 1
+            found[parsed['code']] = parsed
+        print(
+            f'{market} {api} page {page}: {len(items)} raw, '
+            f'{added} new valid, total {len(found)}, '
+            f'raw scanned {raw_seen}, API count {expected}',
+            flush=True,
+        )
         if page == 1 and added < 10:
             sample = items[0] if items and isinstance(items[0], dict) else {}
             safe_fields = ('itemCode', 'stockName', 'itemName', 'marketValueRaw',
@@ -178,28 +197,51 @@ def collect_from_api(market, api):
                            'closePriceRaw')
             sample_values = {key: sample.get(key) for key in safe_fields if key in sample}
             raise ValueError(f'Cannot parse Naver stocks; first record PUBLIC fields={sample_values}')
-        if added == 0:
+        if added == 0 and raw_seen < (expected or float('inf')):
             raise ValueError(f'{market}: duplicate/unparseable API page {page}')
-        if expected is not None:
-            if len(found) >= expected:
-                break
-            # Some returned entries may be malformed or halted; never silently
-            # claim an incomplete list as 'all'.
-            if page * PAGE_SIZE >= expected and len(items) < PAGE_SIZE:
-                break
-        elif len(items) < PAGE_SIZE:
+        if expected is not None and raw_seen >= expected:
+            last_page_seen = True
             break
+        if len(items) < PAGE_SIZE:
+            if expected is None or raw_seen >= expected * 0.98:
+                last_page_seen = True
+                break
+            raise ValueError(
+                f'{market}: page {page} ended early; raw {raw_seen} of expected {expected}'
+            )
     else:
         raise ValueError(f'{market}: more than {MAX_PAGES} pages; refusing incomplete list')
 
+    # Never call an early/truncated response a successful snapshot.
+    if not last_page_seen:
+        raise ValueError(f'{market}: source pagination did not finish')
+    if expected is not None and raw_seen < expected * 0.98:
+        raise ValueError(f'{market}: source incomplete: {raw_seen} raw rows / {expected}')
     if len(found) < 200:
-        raise ValueError(f'{market}: only {len(found)} parseable rows, need at least 200')
-    if expected is not None and len(found) < expected * .95:
-        raise ValueError(f'{market}: incomplete listing: {len(found)} of {expected} items (<95%)')
+        raise ValueError(f'{market}: only {len(found)} parseable rows (minimum 200)')
+    usable_ratio = len(found) / max(1, raw_seen)
+    if usable_ratio < 0.65:
+        raise ValueError(
+            f'{market}: only {len(found)} usable rows / {raw_seen} raw rows '
+            f'({usable_ratio:.1%}); inspect parsing before publication'
+        )
     ordered = sorted(found.values(), key=lambda item: item['marketCap'], reverse=True)
-    print(f'{market}: complete snapshot, {len(ordered)} companies via {api}', flush=True)
-    return ordered
-
+    print(
+        f'{market}: source pagination complete; raw {raw_seen}/{expected}, '
+        f'usable {len(ordered)}, rejected {rejected}, '
+        f'other duplicates {raw_seen-rejected-len(ordered)}. '
+        f'The displayed “all” includes usable stocks only.',
+        flush=True,
+    )
+    quality = {
+        'listedCount': expected,
+        'rawScanned': raw_seen,
+        'usableCount': len(ordered),
+        'unusableCount': max(0, raw_seen - len(ordered)),
+        'allListingsIncluded': expected is not None
+                              and len(ordered) >= expected,
+    }
+    return ordered, quality
 
 def collect(market):
     errors = []
@@ -216,7 +258,7 @@ def main():
     generated = {}
     timestamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
     for market in ('KOSPI', 'KOSDAQ'):
-        stocks = collect(market)
+        stocks, quality = collect(market)
         generated[market] = {
             'market': market,
             'updatedAt': timestamp,
@@ -224,6 +266,7 @@ def main():
             'unit': '100millionKRW',
             'realtime': False,
             'stocks': stocks,
+            'coverage': quality,
         }
     OUT.mkdir(parents=True, exist_ok=True)
     # Do not modify either snapshot until BOTH markets have been validated.
