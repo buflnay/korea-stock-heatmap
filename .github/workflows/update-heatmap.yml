@@ -31,11 +31,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Collect KOSPI and KOSDAQ from Naver Finance
+        working-directory: korea-stock-heatmap-kospi-kosdaq
         run: python3 scripts/update.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: korea-stock-heatmap-kospi-kosdaq
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
